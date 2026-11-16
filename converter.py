@@ -311,6 +311,23 @@ def _sql_literal(value):
     return "'" + value.replace("'", "''") + "'"
 
 
+def _sql_column_type(records, column):
+    types = set()
+    integer_requires_exact_storage = False
+    for record in records:
+        value = _sql_storage_value(record.get(column))
+        if value is not None:
+            types.add(type(value))
+            if type(value) is int and float(value) != value:
+                integer_requires_exact_storage = True
+
+    if types == {int, float} and not integer_requires_exact_storage:
+        return "REAL"
+    storage_types = {int: "INTEGER", float: "REAL", str: "TEXT"}
+    # BLOB affinity retains the original storage classes in mixed columns.
+    return storage_types[types.pop()] if len(types) == 1 else "BLOB"
+
+
 def _write_sql(records, columns, path):
     if len(columns) > SQLITE_COLUMN_LIMIT:
         raise ValueError("SQLite supports up to 2,000 columns. Deselect some columns or choose another format.")
@@ -318,13 +335,9 @@ def _write_sql(records, columns, path):
     if len(folded) != len(columns) or any("\0" in column for column in columns):
         raise ValueError("SQLite needs distinct column names without null characters.")
 
-    storage_types = {int: "INTEGER", float: "REAL", str: "TEXT"}
     declarations = []
     for column in columns:
-        types = {type(_sql_storage_value(record.get(column))) for record in records}
-        types.discard(type(None))
-        # SQLite's BLOB affinity preserves types in mixed columns.
-        declared = storage_types[types.pop()] if len(types) == 1 else "BLOB"
+        declared = _sql_column_type(records, column)
         escaped = column.replace('"', '""')
         declarations.append(f'"{escaped}" {declared}')
 

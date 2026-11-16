@@ -103,6 +103,8 @@ class AcceptanceTests(unittest.TestCase):
                     self.assertEqual(count, ROW_COUNT)
                     self.assertEqual(integrity, "ok")
                     self.assertEqual(storage_types, ("text", "integer", "real", "integer", "text"))
+                    self.assertEqual(db.execute('SELECT typeof(price) FROM "data" WHERE rowid = 7').fetchone(),
+                                     ("real",))
                     for number, (actual, expected) in enumerate(zip(
                         db.execute('SELECT * FROM "data" ORDER BY rowid'), rows, strict=True
                     ), start=1):
@@ -257,3 +259,13 @@ class AcceptanceTests(unittest.TestCase):
         destination = self.path / "line-breaks.xlsx"
         export_table(rows, ["notes"], destination)
         self.assertEqual(read_collections(destination)["Data"], rows)
+
+    def test_sql_mixed_numeric_columns_preserve_large_integer_digits(self):
+        rows = [{"amount": 2**53 + 1}, {"amount": 0.5}]
+        target = self.path / "mixed.sql"
+        export_table(rows, ["amount"], target)
+        with sqlite3.connect(":memory:") as db:
+            db.executescript(target.read_bytes().decode("utf-8"))
+            self.assertEqual(db.execute('PRAGMA table_info("data")').fetchone()[2], "BLOB")
+            actual = db.execute('SELECT amount, typeof(amount) FROM "data" ORDER BY rowid').fetchall()
+            self.assertEqual(actual, [(2**53 + 1, "integer"), (0.5, "real")])
