@@ -262,7 +262,7 @@ def _write_sql(records, columns, path):
     if len({column.lower() for column in columns}) != len(columns) or any("\0" in column for column in columns):
         raise ValueError("SQLite needs distinct column names without null characters.")
     names = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
-    with path.open("w", encoding="utf-8") as stream:
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(f'BEGIN TRANSACTION;\nCREATE TABLE "data" ({names});\n')
         for row in _selected_rows(records, columns):
             values = ", ".join(_sql_value(value) for value in row.values())

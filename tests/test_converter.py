@@ -83,7 +83,7 @@ class ConverterTests(unittest.TestCase):
 
     def test_csv_import_preserves_strings_and_quoted_fields(self):
         source = self.directory / "source.CSV"
-        source.write_text('sku,name,notes\n001,"A, B","first\nsecond"\n002,C\n', encoding="utf-8-sig")
+        source.write_text('sku,name,notes\n001,"A, B","first\nsecond"\n002,C\n', encoding="utf-8-sig", newline="\n")
         records = read_collections(source)["CSV rows"]
         self.assertEqual(records, [
             {"sku": "001", "name": "A, B", "notes": "first\nsecond"},
@@ -132,13 +132,13 @@ class ConverterTests(unittest.TestCase):
 
     def test_sql_export_rebuilds_one_sqlite_table(self):
         target = self.directory / "table.sql"
-        records = [{'quoted"name': "O'Brien", "qty": 2, "sku": "001", "note": "a\0b", "status": None}]
+        records = [{'quoted"name': "O'Brien", "qty": 2, "sku": "001", "note": "a\0b", "line": "a\nb", "status": None}]
         export_table(records, columns_for(records), target)
         database = sqlite3.connect(":memory:")
         self.addCleanup(database.close)
-        database.executescript(target.read_text(encoding="utf-8"))
+        database.executescript(target.read_bytes().decode("utf-8"))
         self.assertEqual(database.execute('SELECT * FROM "data"').fetchall(),
-                         [("O'Brien", 2, "001", "a\0b", None)])
+                         [("O'Brien", 2, "001", "a\0b", "a\nb", None)])
 
     def test_rejects_invalid_inputs_and_database_backups(self):
         for filename, data, message in (
