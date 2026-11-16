@@ -249,3 +249,9 @@ class AcceptanceTests(unittest.TestCase):
                         self.assertEqual(next(iter(read_collections(target).values())),
                                          [{"id": "001"}, {"id": "002"}])
         print("Format matrix: 30 input/output pairs checked.", flush=True)
+
+    def test_excel_round_trip_preserves_carriage_returns(self):
+        rows = [{"notes": "first\r\nsecond\rlast\nfin"}]
+        destination = self.path / "line-breaks.xlsx"
+        export_table(rows, ["notes"], destination)
+        self.assertEqual(read_collections(destination)["Data"], rows)
