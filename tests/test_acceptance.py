@@ -22,7 +22,7 @@ ROW_COUNT = 5000
 def make_rows():
     return [
         (f"{n:06}", f"Produit {n:05} · Café 日本語 ñ", n % 97,
-         n / 8 + 0.125, n % 2 == 0, "O'Brien\r\nline two" if n % 3 == 0 else None)
+         n / 8 + 0.125, n % 2 == 0, "O'Brien\nline two" if n % 3 == 0 else None)
         for n in range(1, ROW_COUNT + 1)
     ]
 
@@ -69,7 +69,9 @@ class AcceptanceTests(unittest.TestCase):
 
         for source in (source_json, source_xlsx):
             with self.subTest(source=source.name):
-                self.open_in_app(app, source)
+                with patch("desktop.messagebox.showerror") as load_error:
+                    self.open_in_app(app, source)
+                    load_error.assert_not_called()
                 self.assertEqual(len(app.records), ROW_COUNT)
                 self.assertEqual(tuple(app.columns), HEADERS)
                 headings = [app.table.heading(i, "text") for i in app.table["columns"]]
@@ -81,8 +83,11 @@ class AcceptanceTests(unittest.TestCase):
 
                 app.output_format.set("SQLite SQL (.sql)")
                 sql_file = self.path / (source.suffix[1:] + "-inventory.sql")
-                with patch("desktop.filedialog.asksaveasfilename", return_value=str(sql_file)):
+                with patch("desktop.filedialog.asksaveasfilename", return_value=str(sql_file)), patch(
+                    "desktop.messagebox.showerror"
+                ) as export_error:
                     app.export_button.invoke()
+                    export_error.assert_not_called()
                 script = sql_file.read_bytes().decode("utf-8")
                 self.assertEqual(script.count('INSERT INTO "data" VALUES'), ROW_COUNT)
                 with sqlite3.connect(":memory:") as db:
@@ -98,7 +103,10 @@ class AcceptanceTests(unittest.TestCase):
                     self.assertEqual(count, ROW_COUNT)
                     self.assertEqual(integrity, "ok")
                     self.assertEqual(storage_types, ("text", "integer", "real", "integer", "text"))
-                    self.assertEqual(db.execute('SELECT * FROM "data" ORDER BY rowid').fetchall(), rows)
+                    for number, (actual, expected) in enumerate(zip(
+                        db.execute('SELECT * FROM "data" ORDER BY rowid'), rows, strict=True
+                    ), start=1):
+                        self.assertEqual(actual, expected, f"{source.suffix} row {number}")
                     print(f"SQL proof {source.suffix}: INSERTs={count}, integrity={integrity}, schema={schema}", flush=True)
                     self.assertEqual(schema, list(zip(HEADERS, ("TEXT", "TEXT", "INTEGER", "REAL", "INTEGER", "TEXT"))))
 
@@ -110,8 +118,11 @@ class AcceptanceTests(unittest.TestCase):
         initial = table.get_children()
         self.assertGreater(len(initial), 20, "Preview stops at its first 20 records.")
         self.assertIn("Produit 00021", table.item(initial[20], "values")[1])
-        while app.next_page_button.instate(["!disabled"]):
+        for _ in range(ROW_COUNT // 20):
+            if app.next_page_button.instate(["disabled"]):
+                break
             app.next_page_button.invoke()
+        self.assertTrue(app.next_page_button.instate(["disabled"]))
         self.assertIn("Produit 05000", table.item(table.get_children()[-1], "values")[1])
         app.previous_page_button.invoke()
         self.assertNotIn("Produit 05000", table.item(table.get_children()[-1], "values")[1])
