@@ -61,10 +61,10 @@ class ConverterApp:
         header.columnconfigure(0, weight=1)
         tk.Label(header, text=APP_NAME, bg=BACKGROUND, fg=INK,
                  font=(family, 24, "bold")).grid(row=0, column=0, sticky="w")
-        self.source_text = tk.StringVar(value="Open a JSON file to choose columns and preview the export.")
+        self.source_text = tk.StringVar(value="Upload a JSON file to choose columns and preview the export.")
         tk.Label(header, textvariable=self.source_text, bg=BACKGROUND, fg=MUTED,
                  font=self.body_font, anchor="w").grid(row=1, column=0, sticky="ew")
-        ttk.Button(header, text="Open JSON…", style="Primary.TButton",
+        ttk.Button(header, text="Upload JSON…", style="Primary.TButton",
                    command=self.open_file).grid(row=0, column=1, rowspan=2, padx=(18, 0))
 
         workspace = tk.Frame(root, bg=BACKGROUND)
@@ -147,14 +147,14 @@ class ConverterApp:
 
     def open_file(self):
         source = filedialog.askopenfilename(
-            parent=self.root, title="Open JSON", filetypes=[("JSON", "*.json"), ("All files", "*")]
+            parent=self.root, title="Upload JSON", filetypes=[("JSON", "*.json"), ("All files", "*")]
         )
         if not source:
             return
         try:
             collections = read_collections(source)
         except (OSError, ValueError, RecursionError) as exc:
-            messagebox.showerror("Cannot open JSON", str(exc), parent=self.root)
+            messagebox.showerror("Cannot read JSON", str(exc), parent=self.root)
             return
 
         self.source = Path(source)

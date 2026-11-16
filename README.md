@@ -6,7 +6,7 @@ Select a JSON file, preview its records, and export the columns you need as CSV 
 
 Open the latest successful **Windows desktop app** run under **Actions**, download the `JsonTableConverter-Windows-x64` artifact, and extract it. Open `JsonTableConverter.exe` to run the app. The executable is portable and needs no separate Python installation.
 
-1. Choose **Open JSON** and select your file. Try [the sample supplies file](examples/supplies.json) first.
+1. Choose **Upload JSON** and select your file. Try [the sample supplies file](examples/supplies.json) first.
 2. Pick a record set if the file contains more than one. Select which columns to keep and check the preview.
 3. Choose **Export CSV** or **Export Excel** and save your file.
 
