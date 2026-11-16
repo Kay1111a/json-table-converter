@@ -1,6 +1,7 @@
 """Desktop interface for JSON Table Converter."""
 
 from pathlib import Path
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
@@ -240,4 +241,8 @@ class ConverterApp:
 if __name__ == "__main__":
     window = tk.Tk()
     ConverterApp(window)
-    window.mainloop()
+    if sys.argv[1:] == ["--smoke-test"]:
+        window.update()
+        window.destroy()
+    else:
+        window.mainloop()

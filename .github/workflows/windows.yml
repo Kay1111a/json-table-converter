@@ -13,10 +13,13 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          architecture: x64
       - name: Install dependencies
         run: python -m pip install -r requirements-build.txt
       - name: Run tests
@@ -26,17 +29,15 @@ jobs:
       - name: Check that the packaged app launches
         shell: pwsh
         run: |
-          $app = Start-Process -FilePath ./dist/JsonTableConverter.exe -PassThru
-          try {
-            if ($app.WaitForExit(10000)) {
-              throw "The desktop app exited during startup (exit code $($app.ExitCode))."
-            }
-          } finally {
-            if (!$app.HasExited) {
-              taskkill /PID $app.Id /T /F
-            }
+          $app = Start-Process -FilePath ./dist/JsonTableConverter.exe -ArgumentList "--smoke-test" -PassThru
+          if (!$app.WaitForExit(30000)) {
+            taskkill /PID $app.Id /T /F
+            throw "The packaged app did not complete its startup check."
           }
-      - uses: actions/upload-artifact@v4
+          if ($app.ExitCode -ne 0) {
+            throw "The packaged app failed its startup check (exit code $($app.ExitCode))."
+          }
+      - uses: actions/upload-artifact@v7
         with:
           name: JsonTableConverter-Windows-x64
           path: dist/JsonTableConverter.exe
