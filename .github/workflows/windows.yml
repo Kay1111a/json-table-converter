@@ -1,0 +1,43 @@
+name: Windows desktop app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Build portable Windows app
+        run: python -m PyInstaller --noconfirm --onefile --windowed --name JsonTableConverter desktop.py
+      - name: Check that the packaged app launches
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath ./dist/JsonTableConverter.exe -PassThru
+          try {
+            if ($app.WaitForExit(10000)) {
+              throw "The desktop app exited during startup (exit code $($app.ExitCode))."
+            }
+          } finally {
+            if (!$app.HasExited) {
+              taskkill /PID $app.Id /T /F
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JsonTableConverter-Windows-x64
+          path: dist/JsonTableConverter.exe
+          if-no-files-found: error

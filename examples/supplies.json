@@ -1,0 +1,8 @@
+{
+  "supplies": [
+    {"item_id":"00123","name":"A4 Paper","category":"Paper","stock":12,"reorder_at":20,"available":true},
+    {"item_id":"00482","name":"Black Ink","category":"Printing","stock":5,"reorder_at":3,"available":true},
+    {"item_id":"00731","name":"Graph Notebook","category":"Notebooks","stock":0,"reorder_at":10,"available":false},
+    {"item_id":"00915","name":"Blue Pen, 0.5 mm","category":"Writing","stock":31,"reorder_at":15,"available":true,"notes":"Shelf B"}
+  ]
+}
