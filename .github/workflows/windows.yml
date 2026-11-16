@@ -2,7 +2,7 @@ name: Windows desktop app
 
 on:
   push:
-    branches: [main]
+    branches: [main, qa/conversion-audit]
   pull_request:
   workflow_dispatch:
 
