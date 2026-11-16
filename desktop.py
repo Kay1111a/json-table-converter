@@ -7,11 +7,12 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 from uuid import UUID
 
-from converter import columns_for, export_table, read_collections, table_value
+from converter import INPUT_FORMATS, OUTPUT_FORMATS, columns_for, export_table, read_collections, table_value
 
 
 APP_NAME = "JSON Table Converter"
 PREVIEW_ROWS = 20
+FORMAT_CHOICES = {f"{label} ({suffix})": suffix for suffix, label in OUTPUT_FORMATS.items()}
 
 BACKGROUND = "#edf3f2"
 PANEL = "#ffffff"
@@ -97,10 +98,10 @@ class ConverterApp:
         header.columnconfigure(0, weight=1)
         tk.Label(header, text=APP_NAME, bg=BACKGROUND, fg=INK,
                  font=(family, 24, "bold")).grid(row=0, column=0, sticky="w")
-        self.source_text = tk.StringVar(value="Upload a JSON file to choose columns and preview the export.")
+        self.source_text = tk.StringVar(value="Choose a file to preview its data and select an output format.")
         tk.Label(header, textvariable=self.source_text, bg=BACKGROUND, fg=MUTED,
                  font=self.body_font, anchor="w").grid(row=1, column=0, sticky="ew")
-        ttk.Button(header, text="Upload JSON…", style="Primary.TButton",
+        ttk.Button(header, text="Upload file…", style="Primary.TButton",
                    command=self.open_file).grid(row=0, column=1, rowspan=2, padx=(18, 0))
 
         workspace = tk.Frame(root, bg=BACKGROUND)
@@ -164,12 +165,14 @@ class ConverterApp:
         tk.Label(footer, textvariable=self.status, font=self.body_font,
                  bg=BACKGROUND, fg=MUTED, anchor="w", wraplength=420,
                  justify="left").grid(row=0, column=0, sticky="ew")
-        self.export_buttons = []
-        for index, (label, suffix) in enumerate((("Export CSV…", ".csv"), ("Export Excel…", ".xlsx")), 1):
-            button = ttk.Button(footer, text=label, style="Action.TButton", state="disabled",
-                                command=lambda extension=suffix: self.save_file(extension))
-            button.grid(row=0, column=index, padx=(8, 0))
-            self.export_buttons.append(button)
+        tk.Label(footer, text="Convert to", font=self.heading_font, bg=BACKGROUND,
+                 fg=INK).grid(row=0, column=1, padx=(12, 6))
+        self.output_format = ttk.Combobox(footer, values=list(FORMAT_CHOICES),
+                                         state="disabled", width=21, font=self.body_font)
+        self.output_format.grid(row=0, column=2)
+        self.export_button = ttk.Button(footer, text="Convert…", style="Action.TButton",
+                                        state="disabled", command=self.save_file)
+        self.export_button.grid(row=0, column=3, padx=(8, 0))
 
         root.bind("<Control-o>", lambda _event: self.open_file())
 
@@ -182,21 +185,26 @@ class ConverterApp:
                         font=self.heading_font if heading else self.body_font, anchor="w")
 
     def open_file(self):
+        patterns = tuple(f"*{suffix}" for suffix in INPUT_FORMATS)
         source = filedialog.askopenfilename(
-            parent=self.root, title="Upload JSON", initialdir=str(upload_directory(self.source)),
-            filetypes=[("JSON", "*.json"), ("All files", "*")],
+            parent=self.root, title="Upload file", initialdir=str(upload_directory(self.source)),
+            filetypes=[("Supported files", patterns), ("All files", "*")],
         )
         if not source:
             return
         try:
             collections = read_collections(source)
         except (OSError, ValueError, RecursionError) as exc:
-            messagebox.showerror("Cannot read JSON", str(exc), parent=self.root)
+            messagebox.showerror("Cannot read file", str(exc), parent=self.root)
             return
 
         self.source = Path(source)
         self.collections = collections
-        self.source_text.set(f"File: {self.source.name}")
+        suffix = self.source.suffix.lower()
+        self.source_text.set(f"{INPUT_FORMATS[suffix]} · {self.source.name}")
+        default = ".json" if suffix == ".csv" else ".csv"
+        self.output_format.set(f"{OUTPUT_FORMATS[default]} ({default})")
+        self.output_format.configure(state="readonly")
         self.record_set.configure(values=list(collections), state="readonly")
         self.record_set.current(1 if len(collections) == 2 and "Whole object" in collections else 0)
         self._load_records()
@@ -245,32 +253,38 @@ class ConverterApp:
         else:
             self.preview_text.set(f"Showing {min(PREVIEW_ROWS, row_count):,} of {row_count:,} rows")
         self.status.set(f"{len(columns):,} of {len(self.columns):,} columns selected" if self.source else "")
-        for button in self.export_buttons:
-            button.configure(state="normal" if columns and row_count else "disabled")
+        self.export_button.configure(state="normal" if columns and row_count else "disabled")
 
-    def save_file(self, suffix):
+    def save_file(self):
         columns = self._selected_columns()
-        if not self.source or not columns:
+        suffix = FORMAT_CHOICES.get(self.output_format.get())
+        if not self.source or not columns or not suffix:
             return
-        label = "CSV" if suffix == ".csv" else "Excel workbook"
+        label = OUTPUT_FORMATS[suffix]
+        stem = self.source.stem
+        if self.source.suffix.lower() == suffix:
+            stem += "-converted"
         destination = filedialog.asksaveasfilename(
             parent=self.root, title=f"Export {label}", filetypes=[(label, f"*{suffix}")],
-            defaultextension=suffix, initialfile=self.source.stem + suffix,
+            defaultextension=suffix, initialfile=stem + suffix,
             initialdir=self.source.parent,
         )
         if not destination:
             return
-        if Path(destination).suffix.lower() != suffix:
+        target = Path(destination)
+        if target.suffix.lower() != suffix:
             messagebox.showerror("Invalid filename", f"Use the {suffix} extension.", parent=self.root)
             return
         try:
+            if target.resolve() == self.source.resolve():
+                raise ValueError("Choose a different filename so the original file is kept.")
             self.root.configure(cursor="watch")
             self.root.update_idletasks()
-            export_table(self.records, columns, destination)
+            export_table(self.records, columns, target)
         except (OSError, ValueError, RecursionError) as exc:
             messagebox.showerror("Export failed", str(exc), parent=self.root)
         else:
-            self.status.set(f"Saved {len(self.records):,} rows to {Path(destination).name}")
+            self.status.set(f"Saved {len(self.records):,} rows to {target.name}")
         finally:
             self.root.configure(cursor="")
 

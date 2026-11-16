@@ -1,21 +1,29 @@
 # JSON Table Converter
 
-Select a JSON file, preview its records, and export the columns you need as CSV or an Excel workbook. This Python desktop project grew out of a JSON-to-CSV lab and uses fictional school supply records as its example.
+Convert a file locally on Windows. Preview the data, choose the columns you want, and save them in the format you select. The app does not send files to a server.
 
 ## Use the desktop app
 
 Open the latest successful **Windows desktop app** run under **Actions**, download the `JsonTableConverter-Windows-x64` artifact, and extract it. Open `JsonTableConverter.exe` to run the app. The executable is portable and needs no separate Python installation.
 
-1. Choose **Upload JSON** and select your file. The picker starts in Downloads, falls back to Documents or your home folder, and remembers your last folder until the app closes. Try [the sample supplies file](examples/supplies.json) first.
-2. Pick a record set if the file contains more than one. Select which columns to keep and check the preview.
-3. Choose **Export CSV** or **Export Excel** and save your file.
+1. Choose **Upload file**. The picker starts in Downloads, falls back to Documents or your home folder, and remembers your last folder until the app closes. Try the [sample supplies file](examples/supplies.json) first.
+2. The app chooses an input reader from the file extension and checks that it can read the file. Pick the record set or worksheet if there is more than one. Select which columns to keep and check the preview.
+3. Pick a format under **Convert to**, click **Convert**, and save the output.
 
-## Supported input
+## File formats
 
-- A top-level array of objects becomes one row per object.
-- A top-level object can become a single row. A nonempty array of objects directly inside it can also be selected as a separate record set.
-- Columns follow their first appearance across the records. Missing fields and JSON nulls export as blank cells. Nested objects and arrays export as JSON text.
-- Excel exports retain JSON strings as text, including leading zeros. Long integer IDs are also written as text to preserve their digits. CSV has no cell types, so use the Excel export if you plan to double-click the file in Excel and preserve those IDs.
+| Format | Import | Export |
+| --- | --- | --- |
+| JSON (`.json`) | A JSON object, an array of objects, or an array directly inside an object | A JSON array of records |
+| CSV (`.csv`) | UTF-8 comma-separated data with headers | UTF-8 comma-separated data with headers |
+| Excel (`.xlsx`) | Select one worksheet with headers and data | One worksheet named Data |
+| XML (`.xml`) | A single record or repeated records with child fields or attributes | A record list with named fields and values encoded as JSON |
+| BSON (`.bson`) | A stream of MongoDB BSON documents for one collection | A stream of BSON documents |
+| SQLite SQL (`.sql`) | — | A script that creates and populates one SQLite table named `data` |
+
+For SQL dumps and native database backups such as `.bak`, `.dump`, and `.backup`, restore the backup with the appropriate database tools, then export the table or collection you want in one of the supported input formats. SQLite SQL output contains the selected rows and columns. Original database schemas, indexes, and relationships require the database's own backup tools.
+
+CSV values are read as text, and Excel exports preserve text IDs with leading zeros. Excel date and time values are imported as ISO-formatted text, and formula cells are imported as formula text. BSON types such as ObjectId and binary data remain native in BSON output and use Extended JSON in text formats. Missing values become blank cells, JSON nulls, or SQL NULL depending on the output.
 
 ## Run from source
 

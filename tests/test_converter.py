@@ -1,10 +1,12 @@
 import csv
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
-from openpyxl import load_workbook
+from bson import Binary, ObjectId
+from openpyxl import Workbook, load_workbook
 
 from converter import columns_for, export_table, read_collections
 
@@ -77,4 +79,78 @@ class ConverterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Select at least one"):
             export_table([{}], [], self.directory / "out.xlsx")
         with self.assertRaisesRegex(ValueError, "filename ending"):
-            export_table([{"x": 1}], ["x"], self.directory / "out.json")
+            export_table([{"x": 1}], ["x"], self.directory / "out.backup")
+
+    def test_csv_import_preserves_strings_and_quoted_fields(self):
+        source = self.directory / "source.CSV"
+        source.write_text('sku,name,notes\n001,"A, B","first\nsecond"\n002,C\n', encoding="utf-8-sig")
+        records = read_collections(source)["CSV rows"]
+        self.assertEqual(records, [
+            {"sku": "001", "name": "A, B", "notes": "first\nsecond"},
+            {"sku": "002", "name": "C"},
+        ])
+        target = self.directory / "selected.json"
+        export_table(records, ["sku", "notes"], target)
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8")),
+                         [{"sku": "001", "notes": "first\nsecond"}, {"sku": "002", "notes": None}])
+
+    def test_excel_import_exposes_worksheets_and_keeps_formulas_as_text(self):
+        source = self.directory / "sheets.xlsx"
+        workbook = Workbook()
+        workbook.active.title = "Stock"
+        workbook.active.append(["id", "total"])
+        workbook.active.append(["001", "=1+1"])
+        workbook.create_sheet("Orders").append(["id"])
+        workbook["Orders"].append([12])
+        workbook.save(source)
+        workbook.close()
+        self.assertEqual(read_collections(source), {
+            "Stock": [{"id": "001", "total": "=1+1"}],
+            "Orders": [{"id": 12}],
+        })
+
+    def test_xml_import_and_typed_export(self):
+        source = self.directory / "source.xml"
+        source.write_text('<items><item code="001"><name>A &amp; B</name></item></items>', encoding="utf-8")
+        self.assertEqual(read_collections(source)["XML records"], [{"@code": "001", "name": "A & B"}])
+        records = [{"Fancy field &": "first\r\nsecond", "qty": 2, "nested": ["A", None]}]
+        target = self.directory / "typed.xml"
+        export_table(records, columns_for(records), target)
+        self.assertEqual(read_collections(target)["XML records"], records)
+
+    def test_bson_import_export_preserves_objectid_and_binary(self):
+        source = self.directory / "source.bson"
+        records = [{"id": ObjectId("64b64c152a9e4eb49bc7ac01"),
+                    "attachment": Binary(b"abc", 128)}, {"id": ObjectId(), "attachment": None}]
+        export_table(records, ["id", "attachment"], source)
+        self.assertEqual(read_collections(source)["BSON documents"], records)
+        target = self.directory / "source.json"
+        export_table(records, ["id", "attachment"], target)
+        result = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual(result[0]["id"], {"$oid": "64b64c152a9e4eb49bc7ac01"})
+        self.assertEqual(result[0]["attachment"]["$binary"]["subType"], "80")
+
+    def test_sql_export_rebuilds_one_sqlite_table(self):
+        target = self.directory / "table.sql"
+        records = [{'quoted"name': "O'Brien", "qty": 2, "sku": "001", "note": "a\0b", "status": None}]
+        export_table(records, columns_for(records), target)
+        database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
+        database.executescript(target.read_text(encoding="utf-8"))
+        self.assertEqual(database.execute('SELECT * FROM "data"').fetchall(),
+                         [("O'Brien", 2, "001", "a\0b", None)])
+
+    def test_rejects_invalid_inputs_and_database_backups(self):
+        for filename, data, message in (
+            ("corrupt.bson", b"abc", "Cannot read this BSON"),
+            ("corrupt.xlsx", b"abc", "Cannot read this Excel"),
+            ("corrupt.xml", b"<broken>", "Cannot read this XML"),
+            ("duplicate.csv", b"id,id\n1,2", "duplicate column"),
+            ("backup.bak", b"", "export a table"),
+            ("database.sql", b"", "export a table"),
+        ):
+            with self.subTest(filename=filename):
+                source = self.directory / filename
+                source.write_bytes(data)
+                with self.assertRaisesRegex(ValueError, message):
+                    read_collections(source)

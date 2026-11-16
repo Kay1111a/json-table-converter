@@ -47,12 +47,14 @@ class DesktopTests(unittest.TestCase):
         self.addCleanup(window.destroy)
         window.withdraw()
         app = ConverterApp(window)
-        self.assertTrue(app.export_buttons[0].instate(["disabled"]))
+        self.assertTrue(app.export_button.instate(["disabled"]))
 
         example = Path(__file__).resolve().parents[1] / "examples" / "supplies.json"
         with patch("desktop.filedialog.askopenfilename", return_value=str(example)) as picker:
             app.open_file()
             self.assertEqual(picker.call_args.kwargs["initialdir"], str(upload_directory()))
+            self.assertEqual(app.output_format.get(), "CSV (.csv)")
+            self.assertTrue(app.source_text.get().startswith("JSON · "))
 
         with patch("desktop.filedialog.askopenfilename", return_value="") as picker:
             app.open_file()
@@ -60,16 +62,29 @@ class DesktopTests(unittest.TestCase):
 
         self.assertEqual(app.record_set.get(), "Array · supplies")
         self.assertEqual(len(app.table.get_children()), 4)
-        self.assertTrue(app.export_buttons[0].instate(["!disabled"]))
+        self.assertTrue(app.export_button.instate(["!disabled"]))
 
         app._select_columns(False)
-        self.assertTrue(app.export_buttons[0].instate(["disabled"]))
+        self.assertTrue(app.export_button.instate(["disabled"]))
         app.fields.selection_set(0)
         app._refresh_preview()
 
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "supplies.csv"
             with patch("desktop.filedialog.asksaveasfilename", return_value=str(target)):
-                app.save_file(".csv")
+                app.save_file()
             self.assertEqual(target.read_text(encoding="utf-8-sig").splitlines()[:2],
                              ["item_id", "00123"])
+
+            with patch("desktop.filedialog.askopenfilename", return_value=str(target)):
+                app.open_file()
+            self.assertTrue(app.source_text.get().startswith("CSV · "))
+            self.assertEqual(app.output_format.get(), "JSON (.json)")
+
+            app.output_format.set("CSV (.csv)")
+            with patch("desktop.filedialog.asksaveasfilename", return_value=str(target)) as picker, patch(
+                "desktop.messagebox.showerror"
+            ) as error:
+                app.save_file()
+                error.assert_called_once()
+                self.assertEqual(picker.call_args.kwargs["initialfile"], "supplies-converted.csv")

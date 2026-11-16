@@ -1,16 +1,58 @@
-"""Read JSON records and export selected fields as CSV or Excel."""
+"""Load tabular data and convert selected columns between file formats."""
 
 import csv
+from datetime import date, time, timedelta
 import json
 import math
 import os
 from pathlib import Path
+import re
 import tempfile
+from xml.etree import ElementTree
+
+from bson import decode_file_iter, encode, json_util
+from bson.codec_options import DEFAULT_CODEC_OPTIONS, DatetimeConversion
+from bson.errors import BSONError
+from defusedxml import ElementTree as SafeXML
+from defusedxml.common import DefusedXmlException
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
+from zipfile import BadZipFile
+
+
+INPUT_FORMATS = {
+    ".json": "JSON",
+    ".csv": "CSV",
+    ".xlsx": "Excel",
+    ".xml": "XML",
+    ".bson": "BSON",
+}
+OUTPUT_FORMATS = {**INPUT_FORMATS, ".sql": "SQLite SQL"}
+BSON_OPTIONS = DEFAULT_CODEC_OPTIONS.with_options(datetime_conversion=DatetimeConversion.DATETIME_AUTO)
+XML_FORMAT = "json-table-converter"
+INVALID_XML = re.compile(r"[^\x09\x0a\x0d\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
 
 
 def read_collections(source):
-    """Return selectable record sets from an array or object at the JSON root."""
-    with Path(source).open(encoding="utf-8-sig") as stream:
+    """Choose a reader by file extension and validate the file as that format."""
+    path = Path(source)
+    suffix = path.suffix.lower()
+    readers = {".json": _read_json, ".csv": _read_csv, ".xlsx": _read_xlsx,
+               ".xml": _read_xml, ".bson": _read_bson}
+    if suffix in {".sql", ".bak", ".dump", ".backup"}:
+        raise ValueError("For database dumps and backups, export a table as CSV, JSON, XLSX, XML, or BSON first.")
+    if suffix not in readers:
+        raise ValueError("Choose a JSON, CSV, XLSX, XML, or BSON file.")
+
+    try:
+        return readers[suffix](path)
+    except (BSONError, BadZipFile, csv.Error, DefusedXmlException,
+            ElementTree.ParseError, InvalidFileException, KeyError, IndexError, OverflowError) as exc:
+        raise ValueError(f"Cannot read this {INPUT_FORMATS[suffix]} file: {exc}") from exc
+
+
+def _read_json(path):
+    with path.open(encoding="utf-8-sig") as stream:
         document = json.load(stream, parse_constant=_invalid_number, parse_float=_finite_float)
     if isinstance(document, list):
         return {"Top-level array": _check_records(document)}
@@ -22,6 +64,87 @@ def read_collections(source):
         if isinstance(value, list) and value and all(isinstance(row, dict) for row in value):
             collections[f"Array · {key}"] = value
     return collections
+
+
+def _rows_with_headers(rows, *, excel=False):
+    header = next(rows, ())
+    fields = [str(value) if value is not None else f"Column {index}"
+              for index, value in enumerate(header, start=1)]
+    if not fields:
+        return []
+    if len(set(fields)) != len(fields):
+        raise ValueError("The file contains duplicate column names.")
+    records = []
+    for number, row in enumerate(rows, start=2):
+        if not row or (excel and all(value is None for value in row)):
+            continue
+        if len(row) > len(fields):
+            raise ValueError(f"Row {number} contains more fields than the header.")
+        values = [value.isoformat() if isinstance(value, (date, time))
+                  else str(value) if isinstance(value, timedelta) else value for value in row]
+        records.append(dict(zip(fields, values)))
+    return records
+
+
+def _read_csv(path):
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        records = _rows_with_headers(csv.reader(stream, strict=True))
+    if not records:
+        raise ValueError("The CSV needs a header and at least one data row.")
+    return {"CSV rows": records}
+
+
+def _read_xlsx(path):
+    with path.open("rb") as stream:
+        workbook = load_workbook(stream, read_only=True, data_only=False)
+        try:
+            collections = {}
+            for sheet in workbook.worksheets:
+                records = _rows_with_headers(sheet.iter_rows(values_only=True), excel=True)
+                if records:
+                    collections[sheet.title] = records
+        finally:
+            workbook.close()
+    if not collections:
+        raise ValueError("The workbook needs a worksheet with headers and data.")
+    return collections
+
+
+def _read_xml(path):
+    root = SafeXML.parse(path).getroot()
+    if root.tag == "records" and root.get("format") == XML_FORMAT:
+        rows = [{field.attrib["name"]: json.loads(field.text or "")
+                 for field in row.findall("field")} for row in root.findall("record")]
+    else:
+        children = list(root)
+        rows = [_xml_fields(child) for child in children] if children and all(
+            len(child) or child.attrib for child in children
+        ) else [_xml_fields(root)]
+    if not any(rows):
+        raise ValueError("The XML needs a row with attributes or child fields.")
+    return {"XML records": rows}
+
+
+def _xml_fields(element):
+    result = {f"@{key}": value for key, value in element.attrib.items()}
+    for child in element:
+        key = child.tag
+        value = ElementTree.tostring(child, encoding="unicode") if len(child) or child.attrib else child.text or ""
+        if key in result:
+            if not isinstance(result[key], list):
+                result[key] = [result[key]]
+            result[key].append(value)
+        else:
+            result[key] = value
+    return result
+
+
+def _read_bson(path):
+    with path.open("rb") as stream:
+        records = list(decode_file_iter(stream, codec_options=BSON_OPTIONS))
+    if not records:
+        raise ValueError("The BSON file contains no documents.")
+    return {"BSON documents": records}
 
 
 def _invalid_number(value):
@@ -50,9 +173,18 @@ def columns_for(records):
 
 
 def table_value(value):
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    return value
+    if type(value) in (str, int, bool, type(None)):
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int(value)
+    return json_util.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _selected_rows(records, columns):
+    for row in records:
+        yield {column: row.get(column) for column in columns}
 
 
 def export_table(records, columns, destination):
@@ -62,9 +194,10 @@ def export_table(records, columns, destination):
 
     destination = Path(destination)
     suffix = destination.suffix.lower()
-    writers = {".csv": _write_csv, ".xlsx": _write_xlsx}
+    writers = {".csv": _write_csv, ".xlsx": _write_xlsx, ".json": _write_json,
+               ".xml": _write_xml, ".bson": _write_bson, ".sql": _write_sql}
     if suffix not in writers:
-        raise ValueError("Choose a filename ending in .csv or .xlsx.")
+        raise ValueError(f"Choose a filename ending in one of: {', '.join(OUTPUT_FORMATS)}.")
 
     with tempfile.NamedTemporaryFile(
         dir=destination.parent, prefix=".json-table-", suffix=suffix, delete=False
@@ -74,6 +207,8 @@ def export_table(records, columns, destination):
     try:
         writers[suffix](records, columns, temporary)
         os.replace(temporary, destination)
+    except (BSONError, OverflowError) as exc:
+        raise ValueError(f"Cannot export as {OUTPUT_FORMATS[suffix]}: {exc}") from exc
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -85,8 +220,57 @@ def _write_csv(records, columns, path):
         writer.writerows([table_value(row.get(column)) for column in columns] for row in records)
 
 
+def _write_json(records, columns, path):
+    data = json_util.dumps(list(_selected_rows(records, columns)), ensure_ascii=False, indent=2)
+    path.write_text(data + "\n", encoding="utf-8")
+
+
+def _write_xml(records, columns, path):
+    if any(INVALID_XML.search(column) for column in columns):
+        raise ValueError("A column name contains characters that XML cannot store.")
+    root = ElementTree.Element("records", {"format": XML_FORMAT})
+    for row in _selected_rows(records, columns):
+        record = ElementTree.SubElement(root, "record")
+        for key, value in row.items():
+            field = ElementTree.SubElement(record, "field", name=key)
+            field.text = json_util.dumps(value, ensure_ascii=True)
+    ElementTree.indent(root)
+    ElementTree.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _write_bson(records, columns, path):
+    with path.open("wb") as stream:
+        for row in _selected_rows(records, columns):
+            stream.write(encode(row, codec_options=BSON_OPTIONS))
+
+
+def _sql_value(value):
+    value = table_value(value)
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, float) or isinstance(value, int) and -(2**63) <= value < 2**63:
+        return str(value)
+    value = str(value)
+    if "\0" in value:
+        return f"CAST(X'{value.encode('utf-8').hex()}' AS TEXT)"
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _write_sql(records, columns, path):
+    if len({column.lower() for column in columns}) != len(columns) or any("\0" in column for column in columns):
+        raise ValueError("SQLite needs distinct column names without null characters.")
+    names = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write(f'BEGIN TRANSACTION;\nCREATE TABLE "data" ({names});\n')
+        for row in _selected_rows(records, columns):
+            values = ", ".join(_sql_value(value) for value in row.values())
+            stream.write(f'INSERT INTO "data" VALUES ({values});\n')
+        stream.write("COMMIT;\n")
+
+
 def _write_xlsx(records, columns, path):
-    from openpyxl import Workbook
     from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
     if len(records) >= 1_048_576 or len(columns) > 16_384:
