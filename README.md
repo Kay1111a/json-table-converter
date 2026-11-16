@@ -7,7 +7,7 @@ Convert a file locally on Windows. Preview the data, choose the columns you want
 Open the latest successful **Windows desktop app** run under **Actions**, download the `JsonTableConverter-Windows-x64` artifact, and extract it. Open `JsonTableConverter.exe` to run the app. The executable is portable and needs no separate Python installation.
 
 1. Choose **Upload file**. The picker starts in Downloads, falls back to Documents or your home folder, and remembers your last folder until the app closes. Try the [sample supplies file](examples/supplies.json) first.
-2. The app chooses an input reader from the file extension and checks that it can read the file. Pick the record set or worksheet if there is more than one. Select which columns to keep and check the preview.
+2. The app chooses an input reader from the file extension and checks that it can read the file. Pick the record set or worksheet if there is more than one. Select which columns to keep and check the preview. Use **Previous** and **Next** to move through pages of 100 rows.
 3. Pick a format under **Convert to**, click **Convert**, and save the output.
 
 ## File formats
@@ -21,9 +21,9 @@ Open the latest successful **Windows desktop app** run under **Actions**, downlo
 | BSON (`.bson`) | A stream of MongoDB BSON documents for one collection | A stream of BSON documents |
 | SQLite SQL (`.sql`) | — | A script that creates and populates one SQLite table named `data` |
 
-For SQL dumps and native database backups such as `.bak`, `.dump`, and `.backup`, restore the backup with the appropriate database tools, then export the table or collection you want in one of the supported input formats. SQLite SQL output contains the selected rows and columns. Original database schemas, indexes, and relationships require the database's own backup tools.
+For SQL dumps and native database backups such as `.bak`, `.dump`, and `.backup`, restore the backup with the appropriate database tools, then export the table or collection you want in one of the supported input formats. SQLite SQL output contains the selected rows and columns. The exporter declares TEXT, INTEGER, or REAL for uniform columns and uses BLOB affinity for mixed or all-null columns so values can retain their storage types. Boolean values become 0 or 1. Original database schemas, indexes, and relationships require the database's own backup tools.
 
-CSV values are read as text, and Excel exports preserve text IDs with leading zeros. Excel date and time values are imported as ISO-formatted text, and formula cells are imported as formula text. BSON types such as ObjectId and binary data remain native in BSON output and use Extended JSON in text formats. Missing values become blank cells, JSON nulls, or SQL NULL depending on the output.
+CSV values are read as text, and Excel exports preserve text IDs with leading zeros. Excel exports store numbers as text when Excel's numeric precision would change their digits. JSON numbers that cannot be loaded without losing precision produce an error. Quote those values as strings when exact text matters. Excel date and time values are imported as ISO-formatted text, and formula cells are imported as formula text. BSON types such as ObjectId and binary data remain native in BSON output and use Extended JSON in text formats. Missing values become blank cells, JSON nulls, or SQL NULL depending on the output.
 
 ## Run from source
 
@@ -39,6 +39,8 @@ Run the tests from the repo root. The desktop smoke test uses Tk and skips if th
 ```sh
 python -m unittest discover -s tests -v
 ```
+
+The [QA log](QA_LOG.md) lists the reproduced defects and the acceptance checks, including two 5,000-row SQLite imports.
 
 ## Build on Windows
 

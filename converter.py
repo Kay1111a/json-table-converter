@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from threading import Lock
 from xml.etree import ElementTree
 
 from bson import decode_file_iter, encode, json_util
@@ -31,6 +32,9 @@ INPUT_FORMATS = {
 OUTPUT_FORMATS = {**INPUT_FORMATS, ".sql": "SQLite SQL"}
 BSON_OPTIONS = DEFAULT_CODEC_OPTIONS.with_options(datetime_conversion=DatetimeConversion.DATETIME_AUTO)
 XML_FORMAT = "json-table-converter"
+CSV_READ_LOCK = Lock()
+SQLITE_COLUMN_LIMIT = 2_000
+SQLITE_IDENTIFIER_FOLD = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 INVALID_XML = re.compile(r"[^\x09\x0a\x0d\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
 
 
@@ -92,8 +96,14 @@ def _rows_with_headers(rows):
 
 
 def _read_csv(path):
-    with path.open(encoding="utf-8-sig", newline="") as stream:
-        records = _rows_with_headers(csv.reader(stream, strict=True))
+    with path.open(encoding="utf-8-sig", newline="") as stream, CSV_READ_LOCK:
+        limit = csv.field_size_limit()
+        file_size = os.fstat(stream.fileno()).st_size
+        csv.field_size_limit(max(limit, min(file_size, 2**31 - 1)))
+        try:
+            records = _rows_with_headers(csv.reader(stream, strict=True))
+        finally:
+            csv.field_size_limit(limit)
     if not records:
         raise ValueError("The CSV needs a header and at least one data row.")
     return {"CSV rows": records}
@@ -282,28 +292,46 @@ def _write_bson(records, columns, path):
             stream.write(encode(row, codec_options=BSON_OPTIONS))
 
 
-def _sql_value(value):
+def _sql_storage_value(value):
     value = table_value(value)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int) and not -(2**63) <= value < 2**63:
+        return str(value)
+    return value
+
+
+def _sql_literal(value):
     if value is None:
         return "NULL"
-    if isinstance(value, bool):
-        return str(int(value))
-    if isinstance(value, float) or isinstance(value, int) and -(2**63) <= value < 2**63:
+    if isinstance(value, (int, float)):
         return str(value)
-    value = str(value)
     if "\0" in value:
         return f"CAST(X'{value.encode('utf-8').hex()}' AS TEXT)"
     return "'" + value.replace("'", "''") + "'"
 
 
 def _write_sql(records, columns, path):
-    if len({column.lower() for column in columns}) != len(columns) or any("\0" in column for column in columns):
+    if len(columns) > SQLITE_COLUMN_LIMIT:
+        raise ValueError("SQLite supports up to 2,000 columns. Deselect some columns or choose another format.")
+    folded = {column.translate(SQLITE_IDENTIFIER_FOLD) for column in columns}
+    if len(folded) != len(columns) or any("\0" in column for column in columns):
         raise ValueError("SQLite needs distinct column names without null characters.")
-    names = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
+
+    storage_types = {int: "INTEGER", float: "REAL", str: "TEXT"}
+    declarations = []
+    for column in columns:
+        types = {type(_sql_storage_value(record.get(column))) for record in records}
+        types.discard(type(None))
+        # SQLite's BLOB affinity preserves types in mixed columns.
+        declared = storage_types[types.pop()] if len(types) == 1 else "BLOB"
+        escaped = column.replace('"', '""')
+        declarations.append(f'"{escaped}" {declared}')
+
     with path.open("w", encoding="utf-8", newline="\n") as stream:
-        stream.write(f'BEGIN TRANSACTION;\nCREATE TABLE "data" ({names});\n')
+        stream.write(f'BEGIN TRANSACTION;\nCREATE TABLE "data" ({", ".join(declarations)});\n')
         for row in _selected_rows(records, columns):
-            values = ", ".join(_sql_value(value) for value in row.values())
+            values = ", ".join(_sql_literal(_sql_storage_value(value)) for value in row.values())
             stream.write(f'INSERT INTO "data" VALUES ({values});\n')
         stream.write("COMMIT;\n")
 

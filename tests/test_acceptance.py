@@ -22,7 +22,7 @@ ROW_COUNT = 5000
 def make_rows():
     return [
         (f"{n:06}", f"Produit {n:05} · Café 日本語 ñ", n % 97,
-         n / 8 + 0.125, n % 2 == 0, "O'Brien\nline two" if n % 3 == 0 else None)
+         n / 8 + 0.125, n % 2 == 0, "O'Brien\r\nline two" if n % 3 == 0 else None)
         for n in range(1, ROW_COUNT + 1)
     ]
 
@@ -112,7 +112,8 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_preview_reaches_past_twenty_and_last_page(self):
         app = self.make_app()
-        source = self.write_json("preview.json", [dict(zip(HEADERS, row)) for row in make_rows()])
+        rows = make_rows() + [("005001", "Produit 05001", 1, 1.125, True, None)]
+        source = self.write_json("preview.json", [dict(zip(HEADERS, row)) for row in rows])
         self.open_in_app(app, source)
         table = app.table
         initial = table.get_children()
@@ -123,9 +124,10 @@ class AcceptanceTests(unittest.TestCase):
                 break
             app.next_page_button.invoke()
         self.assertTrue(app.next_page_button.instate(["disabled"]))
-        self.assertIn("Produit 05000", table.item(table.get_children()[-1], "values")[1])
+        self.assertIn("Produit 05001", table.item(table.get_children()[-1], "values")[1])
+        self.assertEqual(len(table.get_children()), 1)
         app.previous_page_button.invoke()
-        self.assertNotIn("Produit 05000", table.item(table.get_children()[-1], "values")[1])
+        self.assertIn("Produit 05000", table.item(table.get_children()[-1], "values")[1])
 
     def test_preview_reserves_width_for_long_headers(self):
         app = self.make_app()

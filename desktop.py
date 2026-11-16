@@ -11,7 +11,7 @@ from converter import INPUT_FORMATS, OUTPUT_FORMATS, columns_for, export_table, 
 
 
 APP_NAME = "JSON Table Converter"
-PREVIEW_ROWS = 20
+PREVIEW_ROWS = 100
 FORMAT_CHOICES = {f"{label} ({suffix})": suffix for suffix, label in OUTPUT_FORMATS.items()}
 
 BACKGROUND = "#edf3f2"
@@ -64,6 +64,7 @@ class ConverterApp:
         self.collections = {}
         self.columns = []
         self.records = []
+        self.preview_page = 0
 
         root.title(APP_NAME)
         root.geometry("1020x650")
@@ -75,6 +76,7 @@ class ConverterApp:
         family = "Inter" if "Inter" in tkfont.families() else tkfont.nametofont("TkDefaultFont").actual("family")
         self.body_font = (family, 11)
         self.heading_font = (family, 12, "bold")
+        self.header_measure = tkfont.Font(root=root, font=self.heading_font)
         style = ttk.Style(root)
         style.theme_use("clam")
         style.configure("Action.TButton", font=self.heading_font, padding=(14, 8),
@@ -158,6 +160,19 @@ class ConverterApp:
         y_scroll.configure(command=self.table.yview)
         y_scroll.grid(row=2, column=1, sticky="ns")
 
+        pagination = tk.Frame(preview, bg=PANEL)
+        pagination.grid(row=4, column=0, sticky="e", pady=(8, 0))
+        self.previous_page_button = ttk.Button(
+            pagination, text="Previous", style="Action.TButton", state="disabled",
+            command=lambda: self._change_preview_page(-1),
+        )
+        self.previous_page_button.pack(side="left")
+        self.next_page_button = ttk.Button(
+            pagination, text="Next", style="Action.TButton", state="disabled",
+            command=lambda: self._change_preview_page(1),
+        )
+        self.next_page_button.pack(side="left", padx=(6, 0))
+
         footer = tk.Frame(root, bg=BACKGROUND, padx=24, pady=14)
         footer.grid(row=2, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
@@ -210,6 +225,7 @@ class ConverterApp:
         self._load_records()
 
     def _load_records(self, _event=None):
+        self.preview_page = 0
         self.records = self.collections[self.record_set.get()]
         self.columns = columns_for(self.records)
         self.fields.delete(0, "end")
@@ -227,23 +243,36 @@ class ConverterApp:
     def _selected_columns(self):
         return [self.columns[index] for index in self.fields.curselection()]
 
+    def _change_preview_page(self, offset):
+        page = self.preview_page + offset
+        if 0 <= page and page * PREVIEW_ROWS < len(self.records):
+            self.preview_page = page
+            self._refresh_preview()
+
     def _refresh_preview(self, _event=None):
         columns = self._selected_columns()
         self.table.delete(*self.table.get_children())
         identifiers = [f"field{index}" for index in range(len(columns))]
         self.table.configure(columns=identifiers)
         for identifier, name in zip(identifiers, columns):
-            self.table.heading(identifier, text=name or "(empty field name)", anchor="w")
-            self.table.column(identifier, anchor="w", width=155, minwidth=90)
+            heading = name or "(empty field name)"
+            width = max(155, self.header_measure.measure(heading) + 24)
+            self.table.heading(identifier, text=heading, anchor="w")
+            self.table.column(identifier, anchor="w", width=width, minwidth=width, stretch=False)
+        row_count = len(self.records)
+        start = self.preview_page * PREVIEW_ROWS
+        end = min(start + PREVIEW_ROWS, row_count)
         if columns:
-            for index, row in enumerate(self.records[:PREVIEW_ROWS]):
+            for index, row in enumerate(self.records[start:end]):
                 values = [table_value(row.get(column)) for column in columns]
                 display = [" ".join(str(value).splitlines())[:120] if value is not None else ""
                            for value in values]
                 self.table.insert("", "end", values=display, tags=("shaded",) if index % 2 else ())
             self.table.tag_configure("shaded", background="#f2f7f6")
 
-        row_count = len(self.records)
+        self.table.yview_moveto(0)
+        self.previous_page_button.configure(state="normal" if columns and start else "disabled")
+        self.next_page_button.configure(state="normal" if columns and end < row_count else "disabled")
         if not self.source:
             self.preview_text.set("No file loaded")
         elif not self.columns:
@@ -251,7 +280,7 @@ class ConverterApp:
         elif not columns:
             self.preview_text.set("Select columns to preview the export.")
         else:
-            self.preview_text.set(f"Showing {min(PREVIEW_ROWS, row_count):,} of {row_count:,} rows")
+            self.preview_text.set(f"Showing {start + 1:,}–{end:,} of {row_count:,} rows")
         self.status.set(f"{len(columns):,} of {len(self.columns):,} columns selected" if self.source else "")
         self.export_button.configure(state="normal" if columns and row_count else "disabled")
 
@@ -293,7 +322,17 @@ if __name__ == "__main__":
     window = tk.Tk()
     ConverterApp(window)
     if sys.argv[1:] == ["--smoke-test"]:
-        window.update()
-        window.destroy()
+        from tempfile import TemporaryDirectory
+
+        try:
+            window.update()
+            with TemporaryDirectory() as folder:
+                sample = Path(folder) / "smoke.xlsx"
+                records = [{"id": "001", "notes": "first\r\nsecond"}]
+                export_table(records, ["id", "notes"], sample)
+                if read_collections(sample)["Data"] != records:
+                    raise RuntimeError("Packaged Excel round-trip changed the input.")
+        finally:
+            window.destroy()
     else:
         window.mainloop()
