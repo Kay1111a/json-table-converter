@@ -4,7 +4,36 @@ import tkinter as tk
 import unittest
 from unittest.mock import patch
 
-from desktop import ConverterApp
+from desktop import ConverterApp, upload_directory
+
+
+class UploadDirectoryTests(unittest.TestCase):
+    def test_prefers_downloads_then_documents_then_home(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            with patch("desktop.Path.home", return_value=home), patch(
+                "desktop._windows_folder", return_value=None
+            ):
+                self.assertEqual(upload_directory(), home)
+                documents = home / "Documents"
+                documents.mkdir()
+                self.assertEqual(upload_directory(), documents)
+                downloads = home / "Downloads"
+                downloads.mkdir()
+                self.assertEqual(upload_directory(), downloads)
+
+    def test_prefers_redirected_downloads_and_keeps_last_folder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            redirected = home / "Redirected downloads"
+            redirected.mkdir()
+            last_folder = home / "Last upload"
+            last_folder.mkdir()
+            with patch("desktop.Path.home", return_value=home), patch(
+                "desktop._windows_folder", return_value=redirected
+            ):
+                self.assertEqual(upload_directory(), redirected)
+                self.assertEqual(upload_directory(last_folder / "input.json"), last_folder)
 
 
 class DesktopTests(unittest.TestCase):
@@ -21,8 +50,13 @@ class DesktopTests(unittest.TestCase):
         self.assertTrue(app.export_buttons[0].instate(["disabled"]))
 
         example = Path(__file__).resolve().parents[1] / "examples" / "supplies.json"
-        with patch("desktop.filedialog.askopenfilename", return_value=str(example)):
+        with patch("desktop.filedialog.askopenfilename", return_value=str(example)) as picker:
             app.open_file()
+            self.assertEqual(picker.call_args.kwargs["initialdir"], str(upload_directory()))
+
+        with patch("desktop.filedialog.askopenfilename", return_value="") as picker:
+            app.open_file()
+            self.assertEqual(picker.call_args.kwargs["initialdir"], str(example.parent))
 
         self.assertEqual(app.record_set.get(), "Array · supplies")
         self.assertEqual(len(app.table.get_children()), 4)

@@ -5,6 +5,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
+from uuid import UUID
 
 from converter import columns_for, export_table, read_collections, table_value
 
@@ -18,6 +19,41 @@ INK = "#102b2b"
 MUTED = "#405957"
 ACCENT = "#09665e"
 BORDER = "#cddcda"
+
+
+def _windows_folder(folder_id):
+    if sys.platform != "win32":
+        return None
+
+    import ctypes
+
+    folder = (ctypes.c_byte * 16).from_buffer_copy(UUID(folder_id).bytes_le)
+    result = ctypes.c_void_p()
+    try:
+        status = ctypes.windll.shell32.SHGetKnownFolderPath(
+            ctypes.byref(folder), 0, None, ctypes.byref(result)
+        )
+        if status == 0 and result.value:
+            return Path(ctypes.wstring_at(result))
+    finally:
+        if result.value:
+            ctypes.windll.ole32.CoTaskMemFree(result)
+    return None
+
+
+def upload_directory(source=None):
+    if source is not None and source.parent.is_dir():
+        return source.parent
+
+    home = Path.home()
+    for name, folder_id in (
+        ("Downloads", "374DE290-123F-4565-9164-39C4925E467B"),
+        ("Documents", "FDD39AD0-238F-46AF-ADB4-6C85480369C7"),
+    ):
+        for directory in (_windows_folder(folder_id), home / name):
+            if directory is not None and directory.is_dir():
+                return directory
+    return home
 
 
 class ConverterApp:
@@ -147,7 +183,8 @@ class ConverterApp:
 
     def open_file(self):
         source = filedialog.askopenfilename(
-            parent=self.root, title="Upload JSON", filetypes=[("JSON", "*.json"), ("All files", "*")]
+            parent=self.root, title="Upload JSON", initialdir=str(upload_directory(self.source)),
+            filetypes=[("JSON", "*.json"), ("All files", "*")],
         )
         if not source:
             return
