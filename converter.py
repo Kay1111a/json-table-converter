@@ -3,6 +3,7 @@
 import csv
 from datetime import date, time, timedelta
 from decimal import Decimal, InvalidOperation
+from itertools import zip_longest
 import json
 import math
 import os
@@ -11,6 +12,7 @@ import re
 import tempfile
 from threading import Lock
 from xml.etree import ElementTree
+from zipfile import BadZipFile
 
 from bson import decode_file_iter, encode, json_util
 from bson.codec_options import DEFAULT_CODEC_OPTIONS, DatetimeConversion
@@ -18,8 +20,9 @@ from bson.errors import BSONError
 from defusedxml import ElementTree as SafeXML
 from defusedxml.common import DefusedXmlException
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.rich_text import CellRichText
 from openpyxl.utils.exceptions import InvalidFileException
-from zipfile import BadZipFile
+from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
 
 INPUT_FORMATS = {
@@ -56,13 +59,15 @@ def read_collections(source):
         raise ValueError(f"Cannot read this {INPUT_FORMATS[suffix]} file: {exc}") from exc
 
 
-def _read_json(path):
-    with path.open(encoding="utf-8-sig") as stream:
-        document = json.load(
-            stream, parse_constant=_invalid_number, parse_float=_finite_float,
-            object_pairs_hook=_unique_object,
-        )
+def _parse_json(text):
+    document = json.loads(text, parse_constant=_invalid_number, parse_float=_finite_float,
+                          object_pairs_hook=_unique_object)
     _validate_unicode(document)
+    return document
+
+
+def _read_json(path):
+    document = _parse_json(path.read_text(encoding="utf-8-sig"))
     if isinstance(document, list):
         return {"Top-level array": _check_records(document)}
     if not isinstance(document, dict):
@@ -75,23 +80,35 @@ def _read_json(path):
     return collections
 
 
-def _rows_with_headers(rows):
-    header = next(rows, ())
-    fields = [str(value) if value is not None else f"Column {index}"
-              for index, value in enumerate(header, start=1)]
-    if not fields:
-        return []
-    if len(set(fields)) != len(fields):
-        raise ValueError("The file contains duplicate column names.")
-    records = []
+class _HeaderRows(list):
+    """Keep the source schema even when all records omit a trailing field."""
+
+    def __init__(self, header):
+        super().__init__()
+        self.columns = [str(value) if value is not None else f"Column {index}"
+                        for index, value in enumerate(header, start=1)]
+        if len(set(self.columns)) != len(self.columns):
+            raise ValueError("The file contains duplicate column names.")
+
+    def include_unnamed_columns(self, width):
+        new = dict.fromkeys(f"Column {i}" for i in range(len(self.columns) + 1, width + 1))
+        if any(name in new for name in self.columns):
+            raise ValueError("The file contains duplicate column names.")
+        self.columns.extend(new)
+        for row in self:
+            row.update(new)
+
+
+def _csv_records(rows):
+    records = _HeaderRows(next(rows, ()))
+    if not records.columns:
+        return records
     for number, row in enumerate(rows, start=2):
         if not row:
             continue
-        if len(row) > len(fields):
+        if len(row) > len(records.columns):
             raise ValueError(f"Row {number} contains more fields than the header.")
-        values = [value.isoformat() if isinstance(value, (date, time))
-                  else str(value) if isinstance(value, timedelta) else value for value in row]
-        records.append(dict(zip(fields, values)))
+        records.append(dict(zip(records.columns, row)))
     return records
 
 
@@ -101,12 +118,39 @@ def _read_csv(path):
         file_size = os.fstat(stream.fileno()).st_size
         csv.field_size_limit(max(limit, min(file_size, 2**31 - 1)))
         try:
-            records = _rows_with_headers(csv.reader(stream, strict=True))
+            records = _csv_records(csv.reader(stream, strict=True))
         finally:
             csv.field_size_limit(limit)
     if not records:
         raise ValueError("The CSV needs a header and at least one data row.")
     return {"CSV rows": records}
+
+
+def _excel_value(cell):
+    value = cell.value
+    if isinstance(value, (ArrayFormula, DataTableFormula)):
+        if isinstance(value, ArrayFormula) and value.text:
+            return value.text
+        raise ValueError(f"{cell.parent.title}!{cell.coordinate} has no formula text. "
+                         "Paste the calculated results as values in a copy of the workbook and upload it.")
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        return str(value)
+    return value
+
+
+def _worksheet_records(sheet):
+    # Some spreadsheet tools leave stale dimensions. Read the physical cells once.
+    sheet.reset_dimensions()
+    rows = sheet.iter_rows()
+    records = _HeaderRows(_excel_value(cell) for cell in next(rows, ()))
+    for cells in rows:
+        if len(cells) > len(records.columns):
+            records.include_unnamed_columns(len(cells))
+        values = map(_excel_value, cells)
+        records.append(dict(zip_longest(records.columns, values)))
+    return records
 
 
 def _read_xlsx(path):
@@ -115,8 +159,8 @@ def _read_xlsx(path):
         try:
             collections = {}
             for sheet in workbook.worksheets:
-                records = _rows_with_headers(sheet.iter_rows(values_only=True))
-                if records:
+                records = _worksheet_records(sheet)
+                if records and records.columns:
                     collections[sheet.title] = records
         finally:
             workbook.close()
@@ -128,8 +172,13 @@ def _read_xlsx(path):
 def _read_xml(path):
     root = SafeXML.parse(path).getroot()
     if root.tag == "records" and root.get("format") == XML_FORMAT:
-        rows = [{field.attrib["name"]: json.loads(field.text or "")
-                 for field in row.findall("field")} for row in root.findall("record")]
+        rows = []
+        for number, row in enumerate(root.findall("record"), start=1):
+            try:
+                rows.append(_unique_object((field.attrib["name"], _parse_json(field.text or ""))
+                                           for field in row.findall("field")))
+            except (KeyError, ValueError) as exc:
+                raise ValueError(f"Invalid converter XML in record {number}: {exc}") from exc
     else:
         children = list(root)
         has_fields = [bool(len(child) or child.attrib) for child in children]
@@ -169,7 +218,7 @@ def _unique_object(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f"The JSON object contains a duplicate field name: {key!r}.")
+            raise ValueError(f"The record contains a duplicate field name: {key!r}.")
         result[key] = value
     return result
 
@@ -216,7 +265,9 @@ def _check_records(records):
 
 
 def columns_for(records):
-    """Keep field names in their first-seen order across all records."""
+    """Use the source header or discover document fields in first-seen order."""
+    if isinstance(records, _HeaderRows):
+        return records.columns.copy()
     return list(dict.fromkeys(key for row in records for key in row))
 
 
@@ -374,7 +425,9 @@ def _write_xlsx(records, columns, path):
                         f"Excel cannot store the text at row {row_number}, field {column!r}. "
                         "It contains an unsupported character or exceeds 32,767 characters."
                     )
-                cell = sheet.cell(row_number, column_number, value)
+                # An explicit inline text run distinguishes "" from an absent Excel cell.
+                text_value = CellRichText([""]) if value == "" else value
+                cell = sheet.cell(row_number, column_number, text_value)
                 cell.data_type = "s"
             else:
                 sheet.cell(row_number, column_number, value)

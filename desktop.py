@@ -65,6 +65,7 @@ class ConverterApp:
         self.columns = []
         self.records = []
         self.preview_page = 0
+        self.preview_columns = []
 
         root.title(APP_NAME)
         root.geometry("1020x650")
@@ -154,6 +155,7 @@ class ConverterApp:
         y_scroll = ttk.Scrollbar(preview)
         self.table = ttk.Treeview(preview, style="Preview.Treeview", show="headings",
                                   xscrollcommand=x_scroll.set, yscrollcommand=y_scroll.set)
+        self.table.tag_configure("shaded", background="#f2f7f6")
         self.table.grid(row=2, column=0, sticky="nsew")
         x_scroll.configure(command=self.table.xview)
         x_scroll.grid(row=3, column=0, sticky="ew")
@@ -221,7 +223,8 @@ class ConverterApp:
         self.output_format.set(f"{OUTPUT_FORMATS[default]} ({default})")
         self.output_format.configure(state="readonly")
         self.record_set.configure(values=list(collections), state="readonly")
-        self.record_set.current(1 if len(collections) == 2 and "Whole object" in collections else 0)
+        single_nested_array = suffix == ".json" and len(collections) == 2 and "Whole object" in collections
+        self.record_set.current(1 if single_nested_array else 0)
         self._load_records()
 
     def _load_records(self, _event=None):
@@ -249,9 +252,9 @@ class ConverterApp:
             self.preview_page = page
             self._refresh_preview()
 
-    def _refresh_preview(self, _event=None):
-        columns = self._selected_columns()
-        self.table.delete(*self.table.get_children())
+    def _set_preview_columns(self, columns):
+        if columns == self.preview_columns:
+            return
         identifiers = [f"field{index}" for index in range(len(columns))]
         self.table.configure(columns=identifiers)
         for identifier, name in zip(identifiers, columns):
@@ -259,6 +262,12 @@ class ConverterApp:
             width = max(155, self.header_measure.measure(heading) + 24)
             self.table.heading(identifier, text=heading, anchor="w")
             self.table.column(identifier, anchor="w", width=width, minwidth=width, stretch=False)
+        self.preview_columns = columns
+
+    def _refresh_preview(self, _event=None):
+        columns = self._selected_columns()
+        self.table.delete(*self.table.get_children())
+        self._set_preview_columns(columns)
         row_count = len(self.records)
         start = self.preview_page * PREVIEW_ROWS
         end = min(start + PREVIEW_ROWS, row_count)
@@ -268,7 +277,6 @@ class ConverterApp:
                 display = [" ".join(str(value).splitlines())[:120] if value is not None else ""
                            for value in values]
                 self.table.insert("", "end", values=display, tags=("shaded",) if index % 2 else ())
-            self.table.tag_configure("shaded", background="#f2f7f6")
 
         self.table.yview_moveto(0)
         self.previous_page_button.configure(state="normal" if columns and start else "disabled")

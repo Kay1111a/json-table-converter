@@ -138,6 +138,30 @@ class AcceptanceTests(unittest.TestCase):
         width = tkfont.Font(root=app.root, font=app.heading_font).measure(header)
         self.assertGreaterEqual(app.table.column("field0", "width"), width + 12)
 
+    def test_changing_preview_pages_preserves_resized_columns(self):
+        app = self.make_app()
+        self.open_in_app(app, self.write_json("pages.json", [{"id": n} for n in range(101)]))
+        app.table.column("field0", width=420)
+        app.next_page_button.invoke()
+        self.assertEqual(app.table.column("field0", "width"), 420)
+        self.assertEqual(str(app.table.item(app.table.get_children()[0], "values")[0]), "100")
+        app.previous_page_button.invoke()
+        self.assertEqual(app.table.column("field0", "width"), 420)
+
+    def test_excel_sheet_named_whole_object_opens_in_workbook_order(self):
+        app = self.make_app()
+        source = self.path / "stock.xlsx"
+        workbook = Workbook()
+        workbook.active.title = "Whole object"
+        for sheet in (workbook.active, workbook.create_sheet("Other")):
+            sheet.append(["sku"])
+            sheet.append([sheet.title])
+        workbook.save(source)
+        workbook.close()
+        self.open_in_app(app, source)
+        self.assertEqual(app.record_set.get(), "Whole object")
+        self.assertEqual(app.records, [{"sku": "Whole object"}])
+
     def test_bad_inputs_are_rejected_without_losing_current_preview(self):
         app = self.make_app()
         source = self.write_json("valid.json", [{"sku": "001"}])

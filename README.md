@@ -34,7 +34,9 @@ python -m pip install -r requirements.txt
 python desktop.py
 ```
 
-Run the tests from the repo root. The desktop smoke test uses Tk and skips if there is no graphical display.
+The preview and export both use the CSV or worksheet headers, including columns with no values. Excel imports read the cells present in each sheet even if its saved dimensions are out of date. The converter preserves empty text separately from blank cells in its Excel output. For an Excel what-if data table without standalone formula text, paste its calculated results as values in a copy of the workbook before converting it.
+
+Run the tests from the repo root. The desktop tests use Tk and skip if there is no graphical display.
 
 ```sh
 python -m unittest discover -s tests -v

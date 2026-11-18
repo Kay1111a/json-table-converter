@@ -41,3 +41,17 @@ python -m unittest discover -s tests -v
 The acceptance suite opens each input through the desktop upload handler, checks the headers and column controls, and invokes Convert on the real Tk button. It checks the number of INSERT statements, runs each generated script in a fresh SQLite database using `sqlite3.Connection.executescript`, and verifies `SELECT COUNT(*) FROM "data"`, `PRAGMA integrity_check`, `PRAGMA table_info("data")`, storage types, and every row. It separately covers navigation to row 5,001 and runs all 30 supported input/output format pairs. Empty, corrupt, and wrong-format inputs must show an error while preserving the previously loaded data.
 
 For both inventory files, the generated SQL contained 5,000 INSERT statements and the imported table contained 5,000 rows. SQLite reported `ok` for both integrity checks, and all rows matched the respective inputs. The schema for both was `sku TEXT, product TEXT, quantity INTEGER, price REAL, active INTEGER, notes TEXT`.
+
+## Import and preview regressions
+
+| Area | How to reproduce | Previous result | Regression check |
+|---|---|---|---|
+| CSV headers | 1. Give a CSV three headers. 2. Omit the last field in every row. 3. Convert to SQL. | The last column disappeared. | SQLite contains all three columns and returns NULL for missing values. |
+| Worksheet bounds | 1. Give a 5,001-row sheet a saved range of A1:A2 or A1:H5500. 2. Upload and convert it. | A short range truncated rows and columns. A wide range invented columns. | Both scripts import with the two original headers, all 5,001 rows in order, and an integrity check of `ok`. |
+| Empty Excel text | 1. Export empty strings, a blank field name and nulls to XLSX. 2. Reopen and convert to SQL. | Empty text became null and the field name changed. | SQLite returns the original header and distinct empty strings and NULLs. |
+| Excel formulas | 1. Upload an array formula or a what-if data table. 2. Inspect the export. | Control attributes appeared in place of the formula or its result. | An array formula retains its expression. A data table without formula text reports the cell and how to convert it. |
+| Typed XML | 1. Upload converter XML with a duplicate field, an invalid Unicode escape or a number that loses precision. | Input was accepted with lost or invalid values. | Upload rejects the record with a numbered error. The same JSON validation applies to typed XML field values. |
+| Preview widths | 1. Widen a column. 2. Go to the next page and back. | Each page reset the width. | The resized width and the correct page contents survive navigation. |
+| Worksheet choice | 1. Create two sheets with the first named `Whole object`. 2. Upload the file. | The second sheet opened automatically. | The first sheet opens in workbook order. |
+
+The data checks run without a display in `tests/test_import_fidelity.py`. The two preview checks run against real Tk widgets in `tests/test_acceptance.py`.
